@@ -457,9 +457,13 @@ public class QueryIterator extends QueryOptions implements YieldingKeyValueItera
             
             // now add the result count to the keys (required when not sorting UIDs)
             // Cannot do this on document specific ranges as the count would place the keys outside the initial range
-            if (!sortedUIDs && documentRange == null) {
-                this.serializedDocuments = new ResultCountingIterator(serializedDocuments, resultCount, yield);
-            } else if (this.sortedUIDs) {
+            if (!sortedUIDs) {
+                if (documentRange == null) {
+                    this.serializedDocuments = new ResultCountingIterator(serializedDocuments, resultCount, yield);
+                } else {
+                    log.warn("Creating an unsorted iterator with a document range " + documentRange);
+                }
+            } else {
                 // we have sorted UIDs, so we can mask out the cq
                 this.serializedDocuments = new KeyAdjudicator<>(serializedDocuments, yield);
             }

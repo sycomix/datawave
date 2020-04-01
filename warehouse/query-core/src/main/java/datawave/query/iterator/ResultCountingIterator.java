@@ -9,6 +9,7 @@ import org.apache.hadoop.io.Text;
 
 import java.util.Iterator;
 import java.util.Map.Entry;
+import org.apache.log4j.Logger;
 
 /**
  * Created on 9/6/16.
@@ -17,6 +18,7 @@ public class ResultCountingIterator implements Iterator<Entry<Key,Value>> {
     private volatile long resultCount = 0;
     private Iterator<Entry<Key,Value>> serializedDocuments = null;
     private YieldCallback<Key> yield;
+    private static Logger log = Logger.getLogger(ResultCountingIterator.class);
     
     public ResultCountingIterator(Iterator<Entry<Key,Value>> serializedDocuments, long resultCount, YieldCallback<Key> yieldCallback) {
         this.serializedDocuments = serializedDocuments;
@@ -36,6 +38,9 @@ public class ResultCountingIterator implements Iterator<Entry<Key,Value>> {
     @Override
     public Entry<Key,Value> next() {
         Entry<Key,Value> next = serializedDocuments.next();
+        if (yield != null && yield.hasYielded()) {
+            log.warn("Yield unexpectadly detected in a next");
+        }
         if (next != null) {
             next = Maps.immutableEntry(addKeyCount(next.getKey()), next.getValue());
         }
