@@ -12,6 +12,7 @@ import datawave.query.iterator.QueryIterator;
 import datawave.query.iterator.profile.FinalDocumentTrackingIterator;
 import datawave.query.tables.ShardQueryLogic;
 import datawave.query.tables.edge.DefaultEdgeEventQueryLogic;
+import datawave.query.testframework.AbstractFunctionalQuery;
 import datawave.query.testframework.AccumuloSetupHelper;
 import datawave.query.testframework.CitiesDataType;
 import datawave.query.testframework.DataTypeHadoopConfig;
@@ -74,41 +75,40 @@ import static datawave.query.QueryTestTableHelper.MODEL_TABLE_NAME;
 import static datawave.query.QueryTestTableHelper.SHARD_INDEX_TABLE_NAME;
 import static datawave.query.QueryTestTableHelper.SHARD_TABLE_NAME;
 import static datawave.query.iterator.QueryOptions.SORTED_UIDS;
+import static datawave.query.testframework.RawDataManager.AND_OP;
+import static datawave.query.testframework.RawDataManager.JEXL_AND_OP;
+import static datawave.query.testframework.RawDataManager.RE_OP;
 
-@RunWith(Arquillian.class)
-public class IvaratorYieldingTest {
+public class IvaratorYieldingTest extends AbstractFunctionalQuery {
+
     private static final Logger log = Logger.getLogger(IvaratorYieldingTest.class);
-    protected Authorizations auths = new Authorizations("ALL");
-    private Set<Authorizations> authSet = Collections.singleton(auths);
-    protected static Connector connector = null;
-    private static final String tempDirForIvaratorInterruptTest = "/tmp/TempDirForIvaratorInterruptShardRangeTest";
-
-    @Inject
-    @SpringBean(name = "EventQuery")
-    protected ShardQueryLogic logic;
-    
-    private KryoDocumentDeserializer deserializer;
-    
-    private final DateFormat format = new SimpleDateFormat("yyyyMMdd");
-    
     @Rule
     public TemporaryFolder tmpDir = new TemporaryFolder();
-    
-    @Deployment
-    public static JavaArchive createDeployment() {
-        return ShrinkWrap
-                        .create(JavaArchive.class)
-                        .addPackages(true, "org.apache.deltaspike", "io.astefanutti.metrics.cdi", "datawave.query", "org.jboss.logging",
-                                        "datawave.webservice.query.result.event")
-                        .deleteClass(DefaultEdgeEventQueryLogic.class)
-                        .deleteClass(RemoteEdgeDictionary.class)
-                        .deleteClass(datawave.query.metrics.QueryMetricQueryLogic.class)
-                        .deleteClass(datawave.query.metrics.ShardTableQueryMetricHandler.class)
-                        .addAsManifestResource(
-                                        new StringAsset("<alternatives>" + "<stereotype>datawave.query.tables.edge.MockAlternative</stereotype>"
-                                                        + "</alternatives>"), "beans.xml");
+
+    public IvaratorYieldingTest() {
+        super(CitiesDataType.getManager());
     }
-    
+
+    // ============================================
+    // implemented abstract methods
+    protected void testInit() {
+        this.auths = CitiesDataType.getTestAuths();
+        this.documentKey = CitiesDataType.CityField.EVENT_ID.name();
+    }
+
+    @BeforeClass
+    public static void setUp() throws Exception {
+        Collection<DataTypeHadoopConfig> dataTypes = new ArrayList<>();
+        FieldConfig generic = new GenericCityFields();
+        generic.addIndexField(CitiesDataType.CityField.NUM.name());
+        dataTypes.add(new CitiesDataType(CitiesDataType.CityEntry.generic, generic));
+
+        final AccumuloSetupHelper helper = new AccumuloSetupHelper(dataTypes);
+        log.setLevel(Level.DEBUG);
+        connector = helper.loadTables(log, RebuildingScannerTestHelper.TEARDOWN.ALWAYS_SANS_CONSISTENCY,
+                RebuildingScannerTestHelper.INTERRUPT.FI_EVERY_OTHER);
+    }
+
     @Before
     public void setup() throws IOException {
         TimeZone.setDefault(TimeZone.getTimeZone("GMT"));
@@ -126,142 +126,31 @@ public class IvaratorYieldingTest {
         // setup a directory for cache results
         File tmpDir = this.tmpDir.newFolder("Ivarator.cache");
         logic.setIvaratorCacheBaseURIs(tmpDir.toURI().toString());
-        
-        deserializer = new KryoDocumentDeserializer();
+
+        logic.setYieldThresholdMs(1);
+        logic.getQueryPlanner().setQueryIteratorClass(YieldingQueryIterator.class);
     }
 
-    @BeforeClass
-    public static void setUp() throws Exception {
-        // this will get property substituted into the TypeMetadataBridgeContext.xml file
-        // for the injection test (when this unit test is first created)
-        System.setProperty("type.metadata.dir", tempDirForIvaratorInterruptTest);
-
-        Collection<DataTypeHadoopConfig> dataTypes = new ArrayList<>();
-        FieldConfig generic = new GenericCityFields();
-        generic.addIndexField(CitiesDataType.CityField.NUM.name());
-        dataTypes.add(new CitiesDataType(CitiesDataType.CityEntry.generic, generic));
-
-        final AccumuloSetupHelper helper = new AccumuloSetupHelper(dataTypes);
-        log.setLevel(Level.DEBUG);
-        connector = helper.loadTables(log, RebuildingScannerTestHelper.TEARDOWN.ALWAYS_SANS_CONSISTENCY,
-                RebuildingScannerTestHelper.INTERRUPT.FI_EVERY_OTHER);
-    }
-
-    @AfterClass
-    public static void teardown() {
-        // maybe delete the temp folder here
-        File tempFolder = new File(tempDirForIvaratorInterruptTest);
-        if (tempFolder.exists()) {
-            try {
-                FileUtils.forceDelete(tempFolder);
-            } catch (IOException ex) {
-                log.error(ex);
-            }
-        }
-        TypeRegistry.reset();
-    }
-
-    protected void runTestQuery(List<String> expected, String querystr, Date startDate, Date endDate, Map<String,String> extraParms) throws Exception {
-        runTestQuery(expected, querystr, startDate, endDate, extraParms, connector);
-    }
-
-    protected void runTestQuery(List<String> expected, String querystr, Date startDate, Date endDate, Map<String,String> extraParms, Connector connector)
-                    throws Exception {
-        log.debug("runTestQuery");
-        log.trace("Creating QueryImpl");
-        QueryImpl settings = new QueryImpl();
-        settings.setBeginDate(startDate);
-        settings.setEndDate(endDate);
-        settings.setPagesize(Integer.MAX_VALUE);
-        settings.setQueryAuthorizations(auths.serialize());
-        settings.setQuery(querystr);
-        settings.setParameters(extraParms);
-        settings.setId(UUID.randomUUID());
-        
-        log.debug("query: " + settings.getQuery());
-        log.debug("logic: " + settings.getQueryLogicName());
-        logic.setMaxEvaluationPipelines(1);
-        
-        GenericQueryConfiguration config = logic.initialize(connector, settings, authSet);
-        logic.setupQuery(config);
-        
-        TypeMetadataWriter typeMetadataWriter = TypeMetadataWriter.Factory.createTypeMetadataWriter();
-        TypeMetadataHelper typeMetadataHelper = new TypeMetadataHelper.Factory().createTypeMetadataHelper(connector, MODEL_TABLE_NAME, authSet, false);
-        Map<Set<String>,TypeMetadata> typeMetadataMap = typeMetadataHelper.getTypeMetadataMap(authSet);
-        typeMetadataWriter.writeTypeMetadataMap(typeMetadataMap, MODEL_TABLE_NAME);
-        
-        HashSet<String> expectedSet = new HashSet<>(expected);
-        HashSet<String> resultSet;
-        resultSet = new HashSet<>();
-        Set<Document> docs = new HashSet<>();
-        for (Map.Entry<Key,Value> entry : logic) {
-            if (!isFinalDocument(entry.getKey())) {
-                Document d = deserializer.apply(entry).getValue();
-
-                log.debug(entry.getKey() + " => " + d);
-
-                Attribute<?> attr = d.get("UUID");
-                if (attr == null)
-                    attr = d.get("UUID.0");
-
-                Assert.assertNotNull("Result Document did not contain a 'UUID'", attr);
-                Assert.assertTrue("Expected result to be an instance of DatwawaveTypeAttribute, was: " + attr.getClass().getName(), attr instanceof TypeAttribute
-                        || attr instanceof PreNormalizedAttribute);
-
-                TypeAttribute<?> UUIDAttr = (TypeAttribute<?>) attr;
-
-                String UUID = UUIDAttr.getType().getDelegate().toString();
-                Assert.assertTrue("Received unexpected UUID: " + UUID, expected.contains(UUID));
-
-                resultSet.add(UUID);
-                docs.add(d);
-            }
-        }
-        
-        if (expected.size() > resultSet.size()) {
-            expectedSet.addAll(expected);
-            expectedSet.removeAll(resultSet);
-            
-            for (String s : expectedSet) {
-                log.warn("Missing: " + s);
-            }
-        }
-        
-        if (!expected.containsAll(resultSet)) {
-            log.error("Expected results " + expected + " differ form actual results " + resultSet);
-        }
-        Assert.assertTrue("Expected results " + expected + " differ form actual results " + resultSet, expected.containsAll(resultSet));
-        Assert.assertEquals("Unexpected number of records", expected.size(), resultSet.size());
-    }
-
-    private boolean isFinalDocument(Key key) {
-        return FinalDocumentTrackingIterator.isFinalDocumentKey(key);
-    }
-    
     @Test
     public void testIvaratorInterruptedAndYieldSorted() throws Exception {
         Map<String,String> params = new HashMap<>();
-        
         // both required in order to force ivarator to call fillSets
         params.put(SORTED_UIDS, "true");
         logic.getConfig().setUnsortedUIDsEnabled(false);
-        String query = "UUID =~ '^[CS].*' && filter:includeRegex(UUID, '.*A.*')";
-        String[] results = new String[] {"SOPRANO", "CAPONE"}; // should skip "CORLEONE"
-        logic.setYieldThresholdMs(1);
-        logic.getQueryPlanner().setQueryIteratorClass(YieldingQueryIterator.class);
-        runTestQuery(Arrays.asList(results), query, format.parse("20091231"), format.parse("20150101"), params);
+
+        String query = CitiesDataType.CityField.CITY.name() + "=~'.*e' && filter:includeRegex(" + CitiesDataType.CityField.CITY.name() + ",'.*e')";
+        String expected = CitiesDataType.CityField.CITY.name() + "=~'.*e'";
+        runTest(query, expected, params);
     }
 
 
     @Test
     public void testIvaratorInterruptedAndYieldUnsorted() throws Exception {
-        String query = CitiesDataType.CityField.CITY.name() + " =~ '^[A-Z].*' && " +
-                "filter:includeRegex(" + CitiesDataType.CityField.CITY.name() +", '.*PON.*')";
-        String[] results = new String[] {"CAPONE"}; // should skip "CORLEONE", "CAPONE", "SOPRANO"
-        logic.setYieldThresholdMs(1);
-        logic.getQueryPlanner().setQueryIteratorClass(YieldingQueryIterator.class);
-        runTestQuery(Arrays.asList(results), query, format.parse("20091231"), format.parse("20150101"), Collections.EMPTY_MAP);
+        String query = CitiesDataType.CityField.CITY.name() + RE_OP + "'.*e'"; // + AND_OP + "filter:includeRegex(" + CitiesDataType.CityField.CITY.name() + ",'.*e')";
+        String expected = CitiesDataType.CityField.CITY.name() + "=~'.*e'";
+        runTest(query, expected);
     }
+
 
     public static class YieldingQueryIterator implements YieldingKeyValueIterator<Key, Value> {
 
