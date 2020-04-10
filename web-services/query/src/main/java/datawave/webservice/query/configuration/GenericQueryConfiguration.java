@@ -47,6 +47,8 @@ public abstract class GenericQueryConfiguration {
     
     protected boolean bypassAccumulo;
     
+    protected boolean iteratorDebug = true;
+    
     /**
      * Empty default constructor
      */
@@ -75,6 +77,7 @@ public abstract class GenericQueryConfiguration {
         this.setQueries(genericConfig.getQueries());
         this.setQueryString(genericConfig.getQueryString());
         this.setTableName(genericConfig.getTableName());
+        this.setIteratorDebug(genericConfig.getIteratorDebug());
     }
     
     /**
@@ -165,6 +168,25 @@ public abstract class GenericQueryConfiguration {
     
     public void setBypassAccumulo(boolean bypassAccumulo) {
         this.bypassAccumulo = bypassAccumulo;
+    }
+    
+    /**
+     * Returns true by default
+     * 
+     * @return true, if additional query-scoped debug options are enabled. False otherwise
+     */
+    public boolean getIteratorDebug() {
+        return iteratorDebug;
+    }
+    
+    /**
+     * Enable/disable additional debug options for any query-scoped iterators that support this option
+     * 
+     * @param iteratorDebug
+     *            enabled when true
+     */
+    public void setIteratorDebug(boolean iteratorDebug) {
+        this.iteratorDebug = iteratorDebug;
     }
     
     /**

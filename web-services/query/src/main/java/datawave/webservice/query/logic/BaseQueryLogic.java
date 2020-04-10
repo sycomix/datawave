@@ -55,6 +55,7 @@ public abstract class BaseQueryLogic<T> implements QueryLogic<T> {
         setMaxResults(other.getMaxResults());
         setBaseIteratorPriority(other.getBaseIteratorPriority());
         setBypassAccumulo(other.getBypassAccumulo());
+        setIteratorDebug(other.getIteratorDebug());
         
         // Other variables
         setMaxResults(other.maxResults);
@@ -211,6 +212,14 @@ public abstract class BaseQueryLogic<T> implements QueryLogic<T> {
     
     public void setBypassAccumulo(boolean bypassAccumulo) {
         getConfig().setBypassAccumulo(bypassAccumulo);
+    }
+    
+    public boolean getIteratorDebug() {
+        return getConfig().getIteratorDebug();
+    }
+    
+    public void setIteratorDebug(boolean iteratorDebug) {
+        getConfig().setIteratorDebug(iteratorDebug);
     }
     
     @Override

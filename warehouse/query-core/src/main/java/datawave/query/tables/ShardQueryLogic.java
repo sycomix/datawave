@@ -548,7 +548,7 @@ public class ShardQueryLogic extends BaseQueryLogic<Entry<Key,Value>> {
         this.iterator = this.scheduler.iterator();
         
         if (!config.isSortedUIDs()) {
-            this.iterator = new DedupingIterator(this.iterator);
+            this.iterator = new DedupingIterator(this.iterator, this.getIteratorDebug());
         }
         
         stopwatch.stop();

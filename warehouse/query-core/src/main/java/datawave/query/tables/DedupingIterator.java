@@ -12,23 +12,33 @@ import org.apache.accumulo.core.data.ByteSequence;
 import org.apache.accumulo.core.data.Key;
 import org.apache.accumulo.core.data.Value;
 
-/**
- * Created on 9/13/16.
- */
 class DedupingIterator implements Iterator<Entry<Key,Value>> {
+    static boolean DEBUG_DEFAULT = true;
+    static int BLOOM_EXPECTED_DEFAULT = 500000;
+    static double BLOOM_FPP_DEFAULT = 1e-15;
+    
     private Iterator<Entry<Key,Value>> delegate;
     private Entry<Key,Value> next;
     private BloomFilter<byte[]> bloom = null;
     private HashSet<ByteSequence> seen;
-    private final boolean DEBUG = true;
+    private boolean debug;
     
-    public DedupingIterator(Iterator<Entry<Key,Value>> iterator) {
+    public DedupingIterator(Iterator<Entry<Key,Value>> iterator, int bloomFilterExpected, double bloomFilterFpp, boolean debug) {
         this.delegate = iterator;
-        this.bloom = BloomFilter.create(new ByteFunnel(), 500000, 1e-15);
-        if (DEBUG) {
+        this.bloom = BloomFilter.create(new ByteFunnel(), bloomFilterExpected, bloomFilterFpp);
+        this.debug = debug;
+        if (this.debug) {
             this.seen = new HashSet<>();
         }
         getNext();
+    }
+    
+    public DedupingIterator(Iterator<Entry<Key,Value>> iterator) {
+        this(iterator, BLOOM_EXPECTED_DEFAULT, BLOOM_FPP_DEFAULT, DEBUG_DEFAULT);
+    }
+    
+    public DedupingIterator(Iterator<Entry<Key,Value>> iterator, boolean debug) {
+        this(iterator, BLOOM_EXPECTED_DEFAULT, BLOOM_FPP_DEFAULT, debug);
     }
     
     private void getNext() {
@@ -90,14 +100,14 @@ class DedupingIterator implements Iterator<Entry<Key,Value>> {
         byte[] bytes = getBytes(entry);
         ByteSequence byteSeq = new ArrayByteSequence(bytes);
         if (bloom.mightContain(bytes)) {
-            if (DEBUG && !seen.contains(byteSeq)) {
+            if (debug && !seen.contains(byteSeq)) {
                 throw new IllegalStateException("This event is 1 in 1Q!");
             } else {
                 return true;
             }
         }
         bloom.put(bytes);
-        if (DEBUG) {
+        if (debug) {
             seen.add(byteSeq);
         }
         return false;
@@ -113,5 +123,4 @@ class DedupingIterator implements Iterator<Entry<Key,Value>> {
         }
         
     }
-    
 }
