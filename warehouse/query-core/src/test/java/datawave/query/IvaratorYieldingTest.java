@@ -9,8 +9,14 @@ import datawave.query.attributes.PreNormalizedAttribute;
 import datawave.query.attributes.TypeAttribute;
 import datawave.query.function.deserializer.KryoDocumentDeserializer;
 import datawave.query.iterator.QueryIterator;
+import datawave.query.iterator.profile.FinalDocumentTrackingIterator;
 import datawave.query.tables.ShardQueryLogic;
 import datawave.query.tables.edge.DefaultEdgeEventQueryLogic;
+import datawave.query.testframework.AccumuloSetupHelper;
+import datawave.query.testframework.CitiesDataType;
+import datawave.query.testframework.DataTypeHadoopConfig;
+import datawave.query.testframework.FieldConfig;
+import datawave.query.testframework.GenericCityFields;
 import datawave.query.util.TypeMetadata;
 import datawave.query.util.TypeMetadataHelper;
 import datawave.query.util.TypeMetadataWriter;
@@ -23,6 +29,7 @@ import java.io.IOException;
 import java.net.URL;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -46,6 +53,7 @@ import org.apache.accumulo.core.iterators.YieldCallback;
 import org.apache.accumulo.core.iterators.YieldingKeyValueIterator;
 import org.apache.accumulo.core.security.Authorizations;
 import org.apache.commons.io.FileUtils;
+import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
 import org.jboss.arquillian.container.test.api.Deployment;
 import org.jboss.arquillian.junit.Arquillian;
@@ -67,11 +75,14 @@ import static datawave.query.QueryTestTableHelper.SHARD_INDEX_TABLE_NAME;
 import static datawave.query.QueryTestTableHelper.SHARD_TABLE_NAME;
 import static datawave.query.iterator.QueryOptions.SORTED_UIDS;
 
-public abstract class IvaratorYieldingTest {
+@RunWith(Arquillian.class)
+public class IvaratorYieldingTest {
     private static final Logger log = Logger.getLogger(IvaratorYieldingTest.class);
     protected Authorizations auths = new Authorizations("ALL");
     private Set<Authorizations> authSet = Collections.singleton(auths);
-    
+    protected static Connector connector = null;
+    private static final String tempDirForIvaratorInterruptTest = "/tmp/TempDirForIvaratorInterruptShardRangeTest";
+
     @Inject
     @SpringBean(name = "EventQuery")
     protected ShardQueryLogic logic;
@@ -101,6 +112,8 @@ public abstract class IvaratorYieldingTest {
     @Before
     public void setup() throws IOException {
         TimeZone.setDefault(TimeZone.getTimeZone("GMT"));
+
+        logic.setCollectTimingDetails(true);
         
         logic.setFullTableScanEnabled(true);
         // this should force regex expansion into ivarators
@@ -116,95 +129,42 @@ public abstract class IvaratorYieldingTest {
         
         deserializer = new KryoDocumentDeserializer();
     }
-    
-    protected abstract void runTestQuery(List<String> expected, String querystr, Date startDate, Date endDate, Map<String,String> extraParams) throws Exception;
-    
-    @RunWith(Arquillian.class)
-    public static class ShardRange extends IvaratorYieldingTest {
-        protected static Connector connector = null;
-        private static final String tempDirForIvaratorInterruptTest = "/tmp/TempDirForIvaratorInterruptShardRangeTest";
-        
-        @BeforeClass
-        public static void setUp() throws Exception {
-            // this will get property substituted into the TypeMetadataBridgeContext.xml file
-            // for the injection test (when this unit test is first created)
-            System.setProperty("type.metadata.dir", tempDirForIvaratorInterruptTest);
-            
-            QueryTestTableHelper qtth = new QueryTestTableHelper(ShardRange.class.toString(), log, RebuildingScannerTestHelper.TEARDOWN.ALWAYS_SANS_CONSISTENCY,
-                            RebuildingScannerTestHelper.INTERRUPT.FI_EVERY_OTHER);
-            connector = qtth.connector;
-            
-            WiseGuysIngest.writeItAll(connector, WiseGuysIngest.WhatKindaRange.SHARD);
-            Authorizations auths = new Authorizations("ALL");
-            PrintUtility.printTable(connector, auths, SHARD_TABLE_NAME);
-            PrintUtility.printTable(connector, auths, SHARD_INDEX_TABLE_NAME);
-            PrintUtility.printTable(connector, auths, METADATA_TABLE_NAME);
-            PrintUtility.printTable(connector, auths, MODEL_TABLE_NAME);
-        }
-        
-        @AfterClass
-        public static void teardown() {
-            // maybe delete the temp folder here
-            File tempFolder = new File(tempDirForIvaratorInterruptTest);
-            if (tempFolder.exists()) {
-                try {
-                    FileUtils.forceDelete(tempFolder);
-                } catch (IOException ex) {
-                    log.error(ex);
-                }
-            }
-            TypeRegistry.reset();
-        }
-        
-        @Override
-        protected void runTestQuery(List<String> expected, String querystr, Date startDate, Date endDate, Map<String,String> extraParms) throws Exception {
-            super.runTestQuery(expected, querystr, startDate, endDate, extraParms, connector);
-        }
+
+    @BeforeClass
+    public static void setUp() throws Exception {
+        // this will get property substituted into the TypeMetadataBridgeContext.xml file
+        // for the injection test (when this unit test is first created)
+        System.setProperty("type.metadata.dir", tempDirForIvaratorInterruptTest);
+
+        Collection<DataTypeHadoopConfig> dataTypes = new ArrayList<>();
+        FieldConfig generic = new GenericCityFields();
+        generic.addIndexField(CitiesDataType.CityField.NUM.name());
+        dataTypes.add(new CitiesDataType(CitiesDataType.CityEntry.generic, generic));
+
+        final AccumuloSetupHelper helper = new AccumuloSetupHelper(dataTypes);
+        log.setLevel(Level.DEBUG);
+        connector = helper.loadTables(log, RebuildingScannerTestHelper.TEARDOWN.ALWAYS_SANS_CONSISTENCY,
+                RebuildingScannerTestHelper.INTERRUPT.FI_EVERY_OTHER);
     }
-    
-    @RunWith(Arquillian.class)
-    public static class DocumentRange extends IvaratorYieldingTest {
-        protected static Connector connector = null;
-        private static final String tempDirForIvaratorInterruptTest = "/tmp/TempDirForIvaratorInterruptDocumentRangeTest";
-        
-        @BeforeClass
-        public static void setUp() throws Exception {
-            // this will get property substituted into the TypeMetadataBridgeContext.xml file
-            // for the injection test (when this unit test is first created)
-            System.setProperty("type.metadata.dir", tempDirForIvaratorInterruptTest);
-            
-            QueryTestTableHelper qtth = new QueryTestTableHelper(ShardRange.class.toString(), log, RebuildingScannerTestHelper.TEARDOWN.ALWAYS_SANS_CONSISTENCY,
-                            RebuildingScannerTestHelper.INTERRUPT.FI_EVERY_OTHER);
-            connector = qtth.connector;
-            
-            WiseGuysIngest.writeItAll(connector, WiseGuysIngest.WhatKindaRange.DOCUMENT);
-            Authorizations auths = new Authorizations("ALL");
-            PrintUtility.printTable(connector, auths, SHARD_TABLE_NAME);
-            PrintUtility.printTable(connector, auths, SHARD_INDEX_TABLE_NAME);
-            PrintUtility.printTable(connector, auths, METADATA_TABLE_NAME);
-            PrintUtility.printTable(connector, auths, MODEL_TABLE_NAME);
-        }
-        
-        @AfterClass
-        public static void teardown() {
-            // maybe delete the temp folder here
-            File tempFolder = new File(tempDirForIvaratorInterruptTest);
-            if (tempFolder.exists()) {
-                try {
-                    FileUtils.forceDelete(tempFolder);
-                } catch (IOException ex) {
-                    log.error(ex);
-                }
+
+    @AfterClass
+    public static void teardown() {
+        // maybe delete the temp folder here
+        File tempFolder = new File(tempDirForIvaratorInterruptTest);
+        if (tempFolder.exists()) {
+            try {
+                FileUtils.forceDelete(tempFolder);
+            } catch (IOException ex) {
+                log.error(ex);
             }
-            TypeRegistry.reset();
         }
-        
-        @Override
-        protected void runTestQuery(List<String> expected, String querystr, Date startDate, Date endDate, Map<String,String> extraParms) throws Exception {
-            super.runTestQuery(expected, querystr, startDate, endDate, extraParms, connector);
-        }
+        TypeRegistry.reset();
     }
-    
+
+    protected void runTestQuery(List<String> expected, String querystr, Date startDate, Date endDate, Map<String,String> extraParms) throws Exception {
+        runTestQuery(expected, querystr, startDate, endDate, extraParms, connector);
+    }
+
     protected void runTestQuery(List<String> expected, String querystr, Date startDate, Date endDate, Map<String,String> extraParms, Connector connector)
                     throws Exception {
         log.debug("runTestQuery");
@@ -235,25 +195,27 @@ public abstract class IvaratorYieldingTest {
         resultSet = new HashSet<>();
         Set<Document> docs = new HashSet<>();
         for (Map.Entry<Key,Value> entry : logic) {
-            Document d = deserializer.apply(entry).getValue();
-            
-            log.debug(entry.getKey() + " => " + d);
-            
-            Attribute<?> attr = d.get("UUID");
-            if (attr == null)
-                attr = d.get("UUID.0");
-            
-            Assert.assertNotNull("Result Document did not contain a 'UUID'", attr);
-            Assert.assertTrue("Expected result to be an instance of DatwawaveTypeAttribute, was: " + attr.getClass().getName(), attr instanceof TypeAttribute
-                            || attr instanceof PreNormalizedAttribute);
-            
-            TypeAttribute<?> UUIDAttr = (TypeAttribute<?>) attr;
-            
-            String UUID = UUIDAttr.getType().getDelegate().toString();
-            Assert.assertTrue("Received unexpected UUID: " + UUID, expected.contains(UUID));
-            
-            resultSet.add(UUID);
-            docs.add(d);
+            if (!isFinalDocument(entry.getKey())) {
+                Document d = deserializer.apply(entry).getValue();
+
+                log.debug(entry.getKey() + " => " + d);
+
+                Attribute<?> attr = d.get("UUID");
+                if (attr == null)
+                    attr = d.get("UUID.0");
+
+                Assert.assertNotNull("Result Document did not contain a 'UUID'", attr);
+                Assert.assertTrue("Expected result to be an instance of DatwawaveTypeAttribute, was: " + attr.getClass().getName(), attr instanceof TypeAttribute
+                        || attr instanceof PreNormalizedAttribute);
+
+                TypeAttribute<?> UUIDAttr = (TypeAttribute<?>) attr;
+
+                String UUID = UUIDAttr.getType().getDelegate().toString();
+                Assert.assertTrue("Received unexpected UUID: " + UUID, expected.contains(UUID));
+
+                resultSet.add(UUID);
+                docs.add(d);
+            }
         }
         
         if (expected.size() > resultSet.size()) {
@@ -270,6 +232,10 @@ public abstract class IvaratorYieldingTest {
         }
         Assert.assertTrue("Expected results " + expected + " differ form actual results " + resultSet, expected.containsAll(resultSet));
         Assert.assertEquals("Unexpected number of records", expected.size(), resultSet.size());
+    }
+
+    private boolean isFinalDocument(Key key) {
+        return FinalDocumentTrackingIterator.isFinalDocumentKey(key);
     }
     
     @Test
@@ -289,8 +255,9 @@ public abstract class IvaratorYieldingTest {
 
     @Test
     public void testIvaratorInterruptedAndYieldUnsorted() throws Exception {
-        String query = "UUID =~ '^[A-Z].*' && filter:includeRegex(UUID, '.*S.*')";
-        String[] results = new String[] {"SOPRANO"}; // should skip "CORLEONE", "CAPONE"
+        String query = CitiesDataType.CityField.CITY.name() + " =~ '^[A-Z].*' && " +
+                "filter:includeRegex(" + CitiesDataType.CityField.CITY.name() +", '.*PON.*')";
+        String[] results = new String[] {"CAPONE"}; // should skip "CORLEONE", "CAPONE", "SOPRANO"
         logic.setYieldThresholdMs(1);
         logic.getQueryPlanner().setQueryIteratorClass(YieldingQueryIterator.class);
         runTestQuery(Arrays.asList(results), query, format.parse("20091231"), format.parse("20150101"), Collections.EMPTY_MAP);
@@ -338,12 +305,16 @@ public abstract class IvaratorYieldingTest {
         @Override public void next() throws IOException {
             __delegate.next();
             while (__yield.hasYielded()) {
+                Key key = __yield.getPositionAndReset();
+                if (!__range.contains(key)) {
+                    throw new IllegalStateException("Yielded to key outside of range");
+                }
                 __delegate = new QueryIterator();
                 __delegate.init(__source, __options, __env);
                 __delegate.enableYielding(__yield);
-                Range r = new Range(__yield.getPositionAndReset(), false, __range.getEndKey(), __range.isEndKeyInclusive());
-                log.info("Yielded at " + r.getStartKey());
-                __delegate.seek(r, __columnFamilies, __inclusive);
+                __range = new Range(key, false, __range.getEndKey(), __range.isEndKeyInclusive());
+                log.info("Yielded at " + __range.getStartKey());
+                __delegate.seek(__range, __columnFamilies, __inclusive);
             }
         }
 
@@ -353,12 +324,16 @@ public abstract class IvaratorYieldingTest {
             __inclusive = inclusive;
             __delegate.seek(range, columnFamilies, inclusive);
             while (__yield.hasYielded()) {
+                Key key = __yield.getPositionAndReset();
+                if (!__range.contains(key)) {
+                    throw new IllegalStateException("Yielded to key outside of range");
+                }
                 __delegate = new QueryIterator();
                 __delegate.init(__source, __options, __env);
                 __delegate.enableYielding(__yield);
-                Range r = new Range(__yield.getPositionAndReset(), false, __range.getEndKey(), __range.isEndKeyInclusive());
-                log.info("Yielded at " + r.getStartKey());
-                __delegate.seek(r, __columnFamilies, __inclusive);
+                __range = new Range(key, false, __range.getEndKey(), __range.isEndKeyInclusive());
+                log.info("Yielded at " + __range.getStartKey());
+                __delegate.seek(__range, __columnFamilies, __inclusive);
             }
         }
 
